@@ -1,0 +1,4 @@
+epi_weights: { f_len: 0.18, f_open: 0.16, f_sp: 0.16, f_vjump: 0.14, f_dev: 0.12, f_place: 0.12, f_yoon: 0.12 }
+final_params: { gamma: 0.5, delta: 2.0, lambda: 0.1 }
+csai_params:  { eta: 0.5, sigma: 3 }
+ur_thresholds: { red_quantile: 0.90, yellow_quantile: 0.75 }
