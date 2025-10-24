@@ -77,7 +77,3 @@ def epi_from_name(name: str) -> dict:
     """旧API互換。従来のテストが import しても動くようにする。"""
     return evaluate_name(name)
 
-# --- Backward compatibility shim --------------------------------------------
-def epi_from_name(name: str) -> dict:
-    """旧API互換。従来のテストが import しても動くようにする。"""
-    return evaluate_name(name)
