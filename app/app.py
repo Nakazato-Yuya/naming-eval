@@ -12,4 +12,6 @@ if name:
     st.metric("M（モーラ数）", r["M"])
     st.metric("f_len（長さペナルティ）", round(r["f_len"], 3))
     st.metric("f_open（開音節不足）", round(r["f_open"], 3))
+    st.metric("f_sp（特殊モーラ比）", round(r["f_sp"], 3))
+    st.metric("f_yoon（拗音比）", round(r["f_yoon"], 3))
     st.metric("EPI（合成スコア）", round(r["EPI"], 3))
