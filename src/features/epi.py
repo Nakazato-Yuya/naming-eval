@@ -1,5 +1,6 @@
 # src/features/epi.py
-import math, yaml
+import math
+import yaml
 from pathlib import Path
 from src.features.reading import normalize_kana, to_mora
 

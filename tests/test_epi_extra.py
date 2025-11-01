@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import pytest
 from src.features.epi import evaluate_name
 
 def _get(metric: str, d: dict) -> float:

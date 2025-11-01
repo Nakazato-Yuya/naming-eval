@@ -1,4 +1,21 @@
+---
 long_vowel: repeat_prev_vowel
 yoon_as_single_mora: true
-foreign_map: { ヴ: ブ, ティ: チ, ディ: ジ, トゥ: トゥ, ファ: フア, フィ: フィ }
-voiceless_set: [k, s, t, h, p, sh, ch, f]
+
+foreign_map:
+  "ヴ": "ブ"
+  "ティ": "チ"
+  "ディ": "ジ"
+  "トゥ": "トゥ"
+  "ファ": "フア"
+  "フィ": "フィ"
+
+voiceless_set:
+  - k
+  - s
+  - t
+  - h
+  - p
+  - sh
+  - ch
+  - f

@@ -1,4 +1,4 @@
-from src.features.epi import f_len, f_open, epi_from_name
+from src.features.epi import f_len, epi_from_name
 
 def test_f_len_range_zero():
     assert f_len(2) == 0.0 and f_len(3) == 0.0 and f_len(4) == 0.0

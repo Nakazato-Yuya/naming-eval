@@ -1,4 +1,5 @@
-import yaml, pathlib
+import yaml
+import pathlib
 def test_yaml_loads():
     for p in ["configs/weights.yaml","configs/normalization.yaml"]:
         assert pathlib.Path(p).exists()
