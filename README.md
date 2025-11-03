@@ -25,3 +25,6 @@ python -m src.scoring.batch_eval data/processed/brand_names.csv reports/brand_ev
 ## Quick Run
 UI: `PYTHONPATH=. streamlit run app/app.py`
 CLI: `python -m src.scoring.batch_eval --w-len 0.18 --w-open 0.16 --w-sp 0.16 --w-yoon 0.12`
+
+### Smoke test
+`python -m src.scoring.batch_eval && head -n 5 reports/sample_eval.csv`
