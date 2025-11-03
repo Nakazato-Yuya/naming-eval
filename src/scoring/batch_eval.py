@@ -1,7 +1,6 @@
 # src/scoring/batch_eval.py
 from __future__ import annotations
 
-import csv
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Dict, List
