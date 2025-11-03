@@ -28,3 +28,7 @@ CLI: `python -m src.scoring.batch_eval --w-len 0.18 --w-open 0.16 --w-sp 0.16 --
 
 ### Smoke test
 `python -m src.scoring.batch_eval && head -n 5 reports/sample_eval.csv`
+
+**Env**: Python 3.12 / macOS ARM 動作確認済み
+
+**Tip**: Streamlit は `pip install watchdog` でホットリロード快適。
