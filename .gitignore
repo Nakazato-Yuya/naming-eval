@@ -8,3 +8,6 @@ data/raw/*
 data/processed/*
 reports/*
 .coverage
+
+!data/processed/
+!data/processed/sample_names.csv
