@@ -21,3 +21,7 @@ PYTHONPATH=. python src/scoring/batch_eval.py
 ```bash
 python -m src.scoring.batch_eval data/processed/brand_names.csv reports/brand_eval.csv
 ```
+
+## Quick Run
+UI: `PYTHONPATH=. streamlit run app/app.py`
+CLI: `python -m src.scoring.batch_eval --w-len 0.18 --w-open 0.16 --w-sp 0.16 --w-yoon 0.12`
