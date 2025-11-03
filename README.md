@@ -1,6 +1,5 @@
 # Naming-Eval
 ![CI](https://github.com/Nakazato-Yuya/naming-eval/actions/workflows/ci.yml/badge.svg)
-![CI](https://github.com/Nakazato-Yuya/naming-eval/actions/workflows/ci.yml/badge.svg)
 
 
 Japanese naming evaluator: ease of pronunciation × adoption trend × distinctiveness.
