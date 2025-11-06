@@ -1,4 +1,4 @@
-# src/scoring/batch_eval.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -22,23 +22,26 @@ class Weights:
     w_yoon: float = 0.25
 
 
-def _ensure_features(row: Dict[str, object]) -> Dict[str, float]:
+def _ensure_features(row: Dict[str, object]) -> Dict[str, object]:
     """
     row に f_len, f_open, f_sp, f_yoon が無ければ name から evaluate_name で生成。
-    既に列がある場合はそれを優先（0–1想定）。
+    既に列がある場合はそれを優先（0–1想定）。M と mora もできる限り埋める。
     """
-    out: Dict[str, float] = {}
-    if "f_len" in row and "f_open" in row and "f_sp" in row and "f_yoon" in row:
-        out["name"] = str(row.get("name", ""))
+    out: Dict[str, object] = {}
+
+    # 既に f_* が揃っている場合はそれを採用（型だけ整える）
+    if all(k in row for k in ("f_len", "f_open", "f_sp", "f_yoon")):
+        out["name"]   = str(row.get("name", ""))
         out["f_len"]  = float(row.get("f_len", 0.0))
         out["f_open"] = float(row.get("f_open", 0.0))
         out["f_sp"]   = float(row.get("f_sp", 0.0))
         out["f_yoon"] = float(row.get("f_yoon", 0.0))
+
         # 任意フィールド（存在すれば反映）
-        out["M"]    = int(row.get("M", 0)) if row.get("M", "") != "" else 0
+        out["M"] = int(row.get("M", 0)) if row.get("M", "") != "" else 0
         mora_val = row.get("mora", [])
         if isinstance(mora_val, str):
-            # 既存CSV互換で '|' 連結文字列が来た場合
+            # 既存CSV互換（'|' 区切り）
             mora_val = [m for m in mora_val.split("|") if m]
         out["mora"] = list(mora_val) if isinstance(mora_val, (list, tuple)) else []
         return out
@@ -49,23 +52,24 @@ def _ensure_features(row: Dict[str, object]) -> Dict[str, float]:
         "name": "", "EPI": 0.0, "f_len": 0.0, "f_open": 0.0, "f_sp": 0.0, "f_yoon": 0.0, "M": 0, "mora": []
     }
     return {
-        "name":  r["name"],
-        "f_len": float(r["f_len"]),
-        "f_open":float(r["f_open"]),
+        "name":  r.get("name", ""),
+        "f_len": float(r.get("f_len", 0.0)),
+        "f_open": float(r.get("f_open", 0.0)),
         "f_sp":  float(r.get("f_sp", 0.0)),
-        "f_yoon":float(r.get("f_yoon", 0.0)),
+        "f_yoon": float(r.get("f_yoon", 0.0)),
         "M":     int(r.get("M", 0)),
         "mora":  list(r.get("mora", [])),
+        # evaluate_name が EPI を返していても、集計は本関数で行うためここでは使わない
     }
 
 
-def _score_from_features(feat: Dict[str, float], w: Weights) -> Dict[str, float]:
+def _score_from_features(feat: Dict[str, object], w: Weights) -> Dict[str, float]:
     """サブ指標と重みから EPI（線形合成）を計算。"""
     f_len  = float(feat["f_len"])
     f_open = float(feat["f_open"])
     f_sp   = float(feat["f_sp"])
     f_yoon = float(feat["f_yoon"])
-    epi = w.w_len*f_len + w.w_open*f_open + w.w_sp*f_sp + w.w_yoon*f_yoon
+    epi = w.w_len * f_len + w.w_open * f_open + w.w_sp * f_sp + w.w_yoon * f_yoon
     return {"EPI": float(epi)}
 
 
@@ -77,12 +81,16 @@ def evaluate_df(df: pd.DataFrame, w: Weights) -> pd.DataFrame:
     """
     records = df.to_dict(orient="records")
     out_rows: List[Dict[str, object]] = []
+
     for r in records:
         feat = _ensure_features(r)
         sc = _score_from_features(feat, w)
+
+        # 元の行 > 特徴量 > スコアの順でマージ（後勝ち）
         row = {**r, **feat, **sc}
-        row["FinalScore"] = row["EPI"]  # TODO: 将来 UR/C-Phono で更新
+        row["FinalScore"] = row["EPI"]  # TODO: 将来 UR/C-Phono と合成
         out_rows.append(row)
+
     return pd.DataFrame(out_rows)
 
 
@@ -110,11 +118,10 @@ def _to_legacy_csv(df_out: pd.DataFrame, out_path: Path) -> None:
     else:
         df["mora"] = ""
 
-    # 欠けている列を補完して順序固定
+    # 欠けている列を補完して順序固定（互換のためすべて文字列化）
     for c in cols:
         if c not in df.columns:
             df[c] = ""
-        # 従来互換として文字列化
         df[c] = df[c].astype(str)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,15 +139,16 @@ def eval_rows(names: Iterable[str]) -> Iterable[Dict[str, str]]:
         if not name:
             continue
         r = evaluate_name(name)
+        # evaluate_name は EPI も返す実装だが、ここではそのまま文字列化して返す
         yield {
             "name": r["name"],
-            "EPI": str(r["EPI"]),
-            "f_len": str(r["f_len"]),
-            "f_open": str(r["f_open"]),
+            "EPI": str(r.get("EPI", 0.0)),
+            "f_len": str(r.get("f_len", 0.0)),
+            "f_open": str(r.get("f_open", 0.0)),
             "f_sp": str(r.get("f_sp", 0.0)),
             "f_yoon": str(r.get("f_yoon", 0.0)),
-            "M": str(r["M"]),
-            "mora": "|".join(r["mora"]),
+            "M": str(r.get("M", 0)),
+            "mora": "|".join(r.get("mora", [])),
         }
 
 
@@ -196,5 +204,3 @@ if __name__ == "__main__":
 
     args = p.parse_args()
     main(args.input, args.output, args.w_len, args.w_open, args.w_sp, args.w_yoon, args.sort_by_epi)
-
-
