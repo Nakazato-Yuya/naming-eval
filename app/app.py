@@ -1,113 +1,177 @@
-# app/app.py
 import sys
 import pathlib
-import io
-sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
-
 import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
 
-# 修正: Weights のインポートを削除
-from src.features.epi import evaluate_name
+# プロジェクトルートをパスに追加して src をインポート可能にする
+# (現在のファイル app/app.py の2つ上の階層をパスに追加)
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-st.set_page_config(page_title="Naming-Eval", layout="wide")
-st.title("Naming-Eval (EPI + Voiced)")
+# ---------------------------------------------------------
+# ロジックのインポート
+# ---------------------------------------------------------
+try:
+    from src.scoring.epi_scoring_final_plane import calculate_epi_plane
+    from src.scoring.epi_scoring_final_it import calculate_epi_it
+except ImportError as e:
+    st.error(f"モジュールのインポートに失敗しました: {e}")
+    st.warning("ディレクトリ構成が正しいか確認してください。(app/ と src/ が同じ階層にある必要があります)")
+    st.stop()
 
-# ---- Weights（共通）----
-st.sidebar.header("合成重み（スライダー）")
+# ---------------------------------------------------------
+# UI設定
+# ---------------------------------------------------------
+st.set_page_config(page_title="Naming-Eval (Latest)", layout="wide")
+st.title("Naming-Eval: 音韻適性評価システム")
+st.markdown("社名・サービス名の「音の響き」を定量評価します。")
 
-# 既存の指標
-w_len  = st.sidebar.slider("w_len（長さペナルティ）",  0.0, 1.0, 0.18, 0.01)
-w_open = st.sidebar.slider("w_open（開音節不足）",     0.0, 1.0, 0.16, 0.01)
-w_sp   = st.sidebar.slider("w_sp（特殊モーラ比）",     0.0, 1.0, 0.16, 0.01)
-w_yoon = st.sidebar.slider("w_yoon（拗音比）",         0.0, 1.0, 0.12, 0.01)
+# ---------------------------------------------------------
+# サイドバー: モデル選択
+# ---------------------------------------------------------
+st.sidebar.header("評価モデル設定")
 
-# ★新機能：濁音・半濁音
-st.sidebar.markdown("---")
-st.sidebar.caption("追加指標（力強さ・ポップさ）")
-w_voiced = st.sidebar.slider("w_voiced（濁音比）",     0.0, 1.0, 0.00, 0.01, help="ガ行・ダ行などの比率。力強さを評価に入れたい場合は上げてください")
-w_semi   = st.sidebar.slider("w_semi（半濁音比）",     0.0, 1.0, 0.00, 0.01, help="パ行の比率。ポップさを評価に入れたい場合は上げてください")
+model_type = st.sidebar.radio(
+    "使用する評価モデル",
+    ("標準モデル (Plane)", "IT特化モデル (IT Special)"),
+    index=0,
+    help="標準モデル: 一般的な美しさ / IT特化モデル: 濁音や専門用語を肯定的に評価"
+)
 
-normalize = st.sidebar.checkbox("重みを正規化して合成する（推奨）", value=True)
+# 選択されたモデルに応じて関数を切り替え
+if model_type == "標準モデル (Plane)":
+    eval_func = calculate_epi_plane
+    st.sidebar.info("✨ **標準モデル**\n\n濁音が少なく、母音で終わる明るい響きを高評価します。\n一般消費者向けブランドに適しています。")
+else:
+    eval_func = calculate_epi_it
+    st.sidebar.success("💻 **IT特化モデル**\n\n濁音（力強さ）や閉音節（テック感）を減点せず、\n長さ（冗長性）を厳しく評価します。\nBtoBやテック企業に適しています。")
 
-# 重み辞書の作成
-current_weights = {
-    "f_len": w_len,
-    "f_open": w_open,
-    "f_sp": w_sp,
-    "f_yoon": w_yoon,
-    "f_voiced": w_voiced,
-    "f_semi_voiced": w_semi,
-}
-
-w_sum = sum(current_weights.values())
-if w_sum == 0:
-    st.sidebar.warning("重みが全て0です。どれかを上げてください。")
-st.sidebar.caption(f"重みの合計: **{w_sum:.2f}**")
-
-tab_single, tab_batch = st.tabs(["🔤 単体評価", "📄 CSVバッチ評価"])
-
-# ---- 単体評価 ----
-with tab_single:
-    name = st.text_input("名前（かな/カナ/混在OK）", "ガンダム")
-    if name:
-        r = evaluate_name(name)
-        st.write("**正規化カナ**:", r["kana"])
-        st.write("**モーラ列**:", " | ".join(r["mora"]))
-
-        # メトリクス表示（2行に分ける）
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("M（モーラ数）", r["M"])
-        c2.metric("f_len (長さ)",  round(r["f_len"],  3))
-        c3.metric("f_open (開音)", round(r["f_open"], 3))
-        c4.metric("f_sp (特殊)",   round(r["f_sp"],   3))
-        
-        c5, c6, c7, c8 = st.columns(4)
-        c5.metric("f_yoon (拗音)", round(r["f_yoon"], 3))
-        c6.metric("f_voiced (濁)", round(r["f_voiced"], 3))
-        c7.metric("f_semi (半濁)", round(r["f_semi_voiced"], 3))
-        
-        # UI重みでの合成
-        epi_val = 0.0
-        if w_sum > 0:
-            numerator = sum(current_weights[k] * r.get(k, 0.0) for k in current_weights)
-            epi_val = numerator / w_sum if normalize else numerator
-            
-        c8.metric("EPI (総合)", round(float(epi_val), 3))
-
-# ---- CSVバッチ評価 ----
-with tab_batch:
-    st.write("CSVをアップロードすると、現在のスライダーの重みでEPIを再計算します。")
-    uploaded = st.file_uploader("CSVをアップロード", type=["csv"])
+# ---------------------------------------------------------
+# レーダーチャート描画関数
+# ---------------------------------------------------------
+def plot_radar(res_dict):
+    # 表示したい指標（スコア以外）
+    categories = ['f_len', 'f_open', 'f_sp', 'f_yoon', 'f_voiced', 'f_vowel', 'f_density']
+    # 日本語ラベルへのマッピング
+    labels = ['長さ', '開放感', '特殊音', '単純性', '清音性/濁音', '母音多様', '密度']
     
-    if uploaded and st.button("スコア計算実行"):
-        df_in = pd.read_csv(uploaded)
-        
-        # DataFrameに対して1行ずつ評価を実行
-        results = []
-        for _, row in df_in.iterrows():
-            # nameカラムがある前提。なければ1列目を使う
-            target_name = row.get("name", row.iloc[0])
-            res = evaluate_name(str(target_name))
+    values = [res_dict.get(c, 0.0) for c in categories]
+    
+    # グラフを閉じるために最初の値を最後に追加
+    values += [values[0]]
+    labels_closure = labels + [labels[0]]
+
+    fig = go.Figure(data=go.Scatterpolar(
+        r=values,
+        theta=labels_closure,
+        fill='toself',
+        name='Features'
+    ))
+
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 1]
+            )
+        ),
+        showlegend=False,
+        margin=dict(t=20, b=20, l=40, r=40)
+    )
+    return fig
+
+# ---------------------------------------------------------
+# メインコンテンツ
+# ---------------------------------------------------------
+tab_single, tab_batch = st.tabs(["🔤 単体評価 (Playground)", "📄 CSV一括診断"])
+
+# ---- Tab 1: 単体評価 ----
+with tab_single:
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        name_input = st.text_input("名前を入力してください", "任天堂")
+        if st.button("診断する", type="primary"):
+            if name_input:
+                # 計算実行
+                result = eval_func(name_input)
+                
+                st.markdown("---")
+                # 総合スコア表示
+                score = result["EPI_Score"]
+                
+                # スコアに応じた色付け
+                if score >= 0.8:
+                    st.success(f"### 総合評価: S ({score:.3f})")
+                elif score >= 0.6:
+                    st.info(f"### 総合評価: A ({score:.3f})")
+                elif score >= 0.4:
+                    st.warning(f"### 総合評価: B ({score:.3f})")
+                else:
+                    st.error(f"### 総合評価: C ({score:.3f})")
+                
+                st.metric("モーラ数 (拍数)", result["M"])
+                
+                # 詳細データ
+                st.write("詳細スコア:")
+                st.json(result, expanded=False)
+
+    with col2:
+        if name_input:
+            # 再計算して表示
+            result = eval_func(name_input)
+            st.subheader("音韻特性レーダーチャート")
+            st.plotly_chart(plot_radar(result), use_container_width=True)
+
+# ---- Tab 2: CSVバッチ評価 ----
+with tab_batch:
+    st.markdown("### CSVファイル一括診断")
+    st.write("企業名・サービス名が入ったCSVをアップロードすると、選択中のモデルで一括採点します。")
+    
+    uploaded_file = st.file_uploader("CSVファイルをアップロード", type=["csv"])
+    
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file)
+            st.write("プレビュー:", df.head())
             
-            # 重み付きスコアの再計算
-            numerator = sum(current_weights[k] * res.get(k, 0.0) for k in current_weights)
-            final_epi = numerator / w_sum if (normalize and w_sum > 0) else numerator
+            # 名前が入っているカラムを選択
+            target_col = st.selectbox("評価する名前のカラムを選択してください", df.columns)
             
-            # 結果を統合
-            res["EPI"] = final_epi
-            results.append(res)
-            
-        df_out = pd.DataFrame(results)
-        
-        st.subheader("結果プレビュー")
-        st.dataframe(df_out)
-        
-        csv_buf = io.StringIO()
-        df_out.to_csv(csv_buf, index=False)
-        st.download_button(
-            "結果CSVをダウンロード",
-            data=csv_buf.getvalue().encode("utf-8"),
-            file_name="naming_eval_result.csv",
-            mime="text/csv"
-        )
+            if st.button("一括計算実行"):
+                with st.spinner("計算中..."):
+                    # プログレスバー
+                    progress_bar = st.progress(0)
+                    results_list = []
+                    
+                    for i, row in df.iterrows():
+                        name_val = str(row[target_col])
+                        res = eval_func(name_val)
+                        res["input_name"] = name_val # 元の名前を保持
+                        results_list.append(res)
+                        progress_bar.progress((i + 1) / len(df))
+                    
+                    # 結果をDataFrame化
+                    df_res = pd.DataFrame(results_list)
+                    
+                    # 元のデータと結合
+                    final_df = pd.concat([df.reset_index(drop=True), df_res], axis=1)
+                    
+                    st.success("計算完了！")
+                    st.dataframe(final_df.head())
+                    
+                    # ダウンロードボタン
+                    csv = final_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="結果CSVをダウンロード",
+                        data=csv,
+                        file_name=f"epi_results_{model_type}.csv",
+                        mime='text/csv',
+                    )
+                    
+                    # 分布の可視化
+                    st.subheader("スコア分布")
+                    st.bar_chart(final_df["EPI_Score"])
+                    
+        except Exception as e:
+            st.error(f"エラーが発生しました: {e}")
