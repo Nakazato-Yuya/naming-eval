@@ -66,24 +66,31 @@ if st.button("診断する", type="primary"):
         # チャートを閉じる処理
         values_chart = values + [values[0]]
         categories_chart = categories + [categories[0]]
+        
+        # ★変更点: チャート上に数値を表示するためのテキストを作成
+        text_values = [f"{v:.2f}" for v in values_chart]
 
         fig = go.Figure(data=go.Scatterpolar(
             r=values_chart,
             theta=categories_chart,
             fill='toself',
-            line_color='#00CC96'
+            line_color='#00CC96',
+            # ★変更点: 数値テキストを表示
+            text=text_values,
+            mode='lines+markers+text',
+            textposition="top center"
         ))
         fig.update_layout(
             polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
             showlegend=False,
-            height=250,
-            margin=dict(t=20, b=20, l=40, r=40)
+            height=300, # 少し大きくしました
+            margin=dict(t=30, b=30, l=40, r=40)
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # 4. 詳細パラメータ解説 (ここを追加！)
+        # 4. 詳細パラメータ解説
         st.markdown("### 📝 詳細スコア内訳")
-        st.write("各項目のスコア（0.0〜1.0）が高いほど「言いやすい」と評価されます。")
+        st.write("各項目の数値（0.0〜1.0）と、その評価理由です。")
 
         # 項目の定義と解説テキスト
         details = [
@@ -104,9 +111,10 @@ if st.button("診断する", type="primary"):
             target_col = d_col1 if i % 2 == 0 else d_col2
             
             with target_col:
-                st.markdown(f"**{label}**")
+                # ★変更点: タイトル横に数値を太字で表示
+                st.markdown(f"**{label}** : `{val:.3f}`")
                 st.progress(val)
-                st.caption(f"{val:.2f} | {desc}")
+                st.caption(f"{desc}")
                 st.write("") # スペース調整
 
         st.divider()
