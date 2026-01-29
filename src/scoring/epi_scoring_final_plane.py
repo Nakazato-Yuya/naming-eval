@@ -86,11 +86,11 @@ def calculate_epi_plane(name: str) -> dict:
     moras, p_counts, mora_vowels = analyze_mora_phoneme(kana)
     M = len(moras)
 
-    # エラー回避: 0モーラの場合は空の結果を返すが、キーだけは維持する
+    # エラー回避: 0モーラの場合もキーを含めて返す
     if M == 0:
         return {k: 0.0 for k in WEIGHTS.keys()} | {"EPI_Score": 0.0, "M": 0, "kana": kana}
 
-    # 長さスコア (2-4拍を最適とする)
+    # 長さスコア
     low, high = 2, 4
     if low <= M <= high:
         d = 0.0
@@ -119,7 +119,7 @@ def calculate_epi_plane(name: str) -> dict:
     avg_phoneme = sum(p_counts) / M
     val_density = _clamp01(((avg_phoneme - 1.0) / 2.0))
 
-    # 総合スコア (標準モデル)
+    # 総合スコア
     score = (
         WEIGHTS["f_len"] * val_len +
         WEIGHTS["f_open"] * val_open +
@@ -130,6 +130,7 @@ def calculate_epi_plane(name: str) -> dict:
         WEIGHTS["f_density"] * (1.0 - val_density)
     )
 
+    # ★修正ポイント: ここで "kana" と "M" を辞書に含める
     return {
         "EPI_Score": score,
         "M": M,
