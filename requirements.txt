@@ -6,3 +6,4 @@ PyYAML==6.0.2
 pytest==8.3.3
 jaconv==0.3
 scikit-learn==1.5.2
+plotly>=5.0.0
