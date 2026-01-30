@@ -1,128 +1,131 @@
-import sys
-import pathlib
-import streamlit as st
-import plotly.graph_objects as go
+import math
+import jaconv
+import unicodedata
 
 # ---------------------------------------------------------
-# パス設定 (srcフォルダを読み込めるようにする)
+# 定数・設定 (Plane: 汎用標準モデル)
 # ---------------------------------------------------------
-sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
+WEIGHTS = {
+    "f_len": 0.20,
+    "f_open": 0.20,
+    "f_sp": 0.15,
+    "f_yoon": 0.15,
+    "f_voiced": 0.15,
+    "f_semi": 0.00,
+    "f_vowel": 0.10,
+    "f_density": 0.05
+}
+LEN_SIGMA = 1.2
 
-try:
-    from src.scoring.epi_scoring_final_plane import calculate_epi_plane
-except ImportError:
-    st.error("モジュールが見つかりません。")
-    st.stop()
+SPECIALS_NO_VOWEL = {"ン", "ッ"}
+SPECIALS_ALL = {"ン", "ッ", "ー"}
+VOICED_CHARS = set("ガギグゲゴザジズゼゾダヂヅデドバビブベボ")
+VOWELS = set("アイウエオ")
+SMALL_Y = set("ャュョ")
+ALL_SMALL = SMALL_Y | set("ァィゥェォヮ")
 
-# ---------------------------------------------------------
-# ページ設定
-# ---------------------------------------------------------
-st.set_page_config(page_title="Naming-Eval Lite", layout="centered")
 
-st.title("Naming-Eval Lite 🚀")
-st.caption("音韻適性評価システム (Standard Model MVP)")
+def normalize_kana(name):
+    if not isinstance(name, str):
+        return ""
+    return jaconv.hira2kata(jaconv.normalize(name))
 
-st.markdown("""
-### その名前、言いやすい？
-社名やサービス名の「発音のしやすさ」をAIが診断します。
-""")
 
-# ---------------------------------------------------------
-# 入力エリア
-# ---------------------------------------------------------
-name_input = st.text_input("診断したい名前（カタカナ推奨）", "メルカリ")
+def _get_vowel(ch):
+    if not ch:
+        return None
+    base = unicodedata.normalize('NFD', ch)[0]
+    vowel_map = {
+        "ア": "アイカサタナハマヤラワガザダバパ",
+        "イ": "イキシチニヒミリギジヂビピ",
+        "ウ": "ウクスツヌフムユルグズヅブプ",
+        "エ": "エケセテネヘメレゲゼデベペ",
+        "オ": "オコソトノホモヨロヲゴゾドボポ"
+    }
+    for v, chars in vowel_map.items():
+        if base in chars:
+            return v
+    return None
 
-# ---------------------------------------------------------
-# 診断ロジック & 表示
-# ---------------------------------------------------------
-if st.button("診断する", type="primary"):
-    if name_input:
-        # 1. 計算実行
-        result = calculate_epi_plane(name_input)
-        
-        # エラー回避: スコア取得 (なければ0.0)
-        score = result.get("EPI_Score", 0.0)
-        
-        # 2. メインスコア表示
-        st.divider()
-        st.markdown("### 📊 総合診断結果")
-        
-        col_score, col_rank = st.columns([1.5, 2])
-        
-        with col_score:
-            st.metric(label="EPI Score", value=f"{score:.3f}")
-        
-        with col_rank:
-            if score >= 0.8:
-                st.success("🏆 **Sランク: 非常に発音しやすい！**\n\n覚えやすく、広まりやすい音の響きです。")
-            elif score >= 0.6:
-                st.info("✨ **Aランク: バランスが良い**\n\n標準的で安定感のある名前です。")
-            elif score >= 0.4:
-                st.warning("⚠️ **Bランク: 個性的**\n\n少し言いづらさがありますが、フックにはなります。")
-            else:
-                st.error("🚨 **Cランク: 改善の余地あり**\n\n発音のリズムや長さを見直すと良くなるかもしれません。")
 
-        # 3. レーダーチャート
-        categories = ['長さ適正', '開放感', '特殊音なし', '単純性', '清音性', '母音多様', '密度適正']
-        keys = ['f_len', 'f_open', 'f_sp', 'f_yoon', 'f_voiced', 'f_vowel', 'f_density']
-        # .get(k, 0) を使うことで、キーが存在しなくても 0 を入れてエラー回避
-        values = [result.get(k, 0) for k in keys]
-        
-        # チャートを閉じる処理
-        values_chart = values + [values[0]]
-        categories_chart = categories + [categories[0]]
-        
-        # 数値テキスト作成
-        text_values = [f"{v:.2f}" for v in values_chart]
+def analyze_mora_phoneme(kana):
+    moras, p_counts, vowels = [], [], []
+    i = 0
+    while i < len(kana):
+        ch = kana[i]
+        # セミコロンを削除し、適切な改行に修正
+        if ch in ["ッ", "ン", "ー"]:
+            moras.append(ch)
+            p_counts.append(1)
+            vowels.append(None)
+            i += 1
+            continue
+        if i + 1 < len(kana) and kana[i+1] in ALL_SMALL:
+            moras.append(ch + kana[i+1])
+            p_counts.append(3)
+            vowels.append(_get_vowel(kana[i+1]))
+            i += 2
+            continue
+        moras.append(ch)
+        p_counts.append(1 if ch in VOWELS else 2)
+        vowels.append(_get_vowel(ch))
+        i += 1
+    return moras, p_counts, vowels
 
-        fig = go.Figure(data=go.Scatterpolar(
-            r=values_chart,
-            theta=categories_chart,
-            fill='toself',
-            line_color='#00CC96',
-            text=text_values,
-            mode='lines+markers+text',
-            textposition="top center"
-        ))
-        fig.update_layout(
-            polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
-            showlegend=False,
-            height=300,
-            margin=dict(t=30, b=30, l=40, r=40)
-        )
-        st.plotly_chart(fig, use_container_width=True)
 
-        # 4. 詳細パラメータ解説
-        st.markdown("### 📝 詳細スコア内訳")
-        st.write("各項目の数値（0.0〜1.0）と、その評価理由です。")
+def _clamp01(x):
+    if x < 0.0:
+        return 0.0
+    if x > 1.0:
+        return 1.0
+    return x
 
-        details = [
-            ("f_len", "長さの適正", "2〜4モーラ（拍）が最も覚えやすいとされます。"),
-            ("f_open", "開放感", "母音（アイウエオ）や「ン」で終わる音の割合。"),
-            ("f_sp", "特殊音の少なさ", "「ッ」「ー」などの特殊拍が少ないほどスムーズ。"),
-            ("f_yoon", "単純性", "「キャ」「シュ」などの拗音が少ないほど単純。"),
-            ("f_voiced", "清音性", "濁音（ガザダバ行）が少ないほどクリアな響き。"),
-            ("f_vowel", "母音の多様性", "使われている母音の種類が多いほど単調にならない。"),
-            ("f_density", "密度の適正", "音の詰め込み具合が適切か。")
-        ]
 
-        d_col1, d_col2 = st.columns(2)
-        
-        for i, (key, label, desc) in enumerate(details):
-            # ここでも .get() で安全に取得
-            val = result.get(key, 0.0)
-            target_col = d_col1 if i % 2 == 0 else d_col2
-            
-            with target_col:
-                st.markdown(f"**{label}** : `{val:.3f}`")
-                st.progress(val)
-                st.caption(f"{desc}")
-                st.write("") 
+def calculate_epi_plane(name: str) -> dict:
+    kana = normalize_kana(name)
+    moras, p_counts, mora_vowels = analyze_mora_phoneme(kana)
+    M = len(moras)
 
-        st.divider()
-        
-        # ★ここが修正箇所: .get() を使って安全に表示する
-        display_kana = result.get('kana', name_input) # データがなければ入力値をそのまま表示
-        display_mora = result.get('M', '-')           # データがなければハイフンを表示
-        
-        st.caption(f"正規化カナ: {display_kana} | モーラ数: {display_mora}")
+    if M == 0:
+        return {k: 0.0 for k in WEIGHTS.keys()} | {
+            "EPI_Score": 0.0,
+            "M": 0,
+            "kana": kana
+        }
+
+    # 長さスコアの算出
+    d = 0.0 if 2 <= M <= 4 else (2 - M if M < 2 else M - 4)
+    val_len = _clamp01(1.0 - math.exp(-(d * d) / (2 * LEN_SIGMA**2)))
+
+    # 各指標の正規化
+    val_open = sum(1 for m in moras if m not in SPECIALS_NO_VOWEL) / M
+    val_sp = 1.0 - (sum(1 for m in moras if m in SPECIALS_ALL) / M)
+    val_yoon = 1.0 - (sum(1 for m in moras if len(m) > 1) / M)
+    val_voiced = 1.0 - (sum(1 for ch in kana if ch in VOICED_CHARS) / len(kana))
+    val_vowel = len(set([v for v in mora_vowels if v is not None])) / M
+    avg_phoneme = sum(p_counts) / M
+    val_density = 1.0 - _clamp01(((avg_phoneme - 1.0) / 2.0))
+
+    # 総合スコアの重み付け合計
+    score = (
+        WEIGHTS["f_len"] * val_len +
+        WEIGHTS["f_open"] * val_open +
+        WEIGHTS["f_sp"] * val_sp +
+        WEIGHTS["f_yoon"] * val_yoon +
+        WEIGHTS["f_voiced"] * val_voiced +
+        WEIGHTS["f_vowel"] * val_vowel +
+        WEIGHTS["f_density"] * val_density
+    )
+
+    return {
+        "EPI_Score": score,
+        "kana": kana,
+        "M": M,
+        "f_len": val_len,
+        "f_open": val_open,
+        "f_sp": val_sp,
+        "f_yoon": val_yoon,
+        "f_voiced": val_voiced,
+        "f_vowel": val_vowel,
+        "f_density": val_density
+    }
