@@ -2,7 +2,7 @@
 """
 tests/test_phonology.py
 
-src/features/phonology.py の出力契約・数式・回帰テスト（21ケース）
+src/features/phonology.py の出力契約・数式・回帰テスト（28ケース）
 """
 from __future__ import annotations
 
@@ -241,3 +241,50 @@ def test_is_generic_hiragana_input():
     """ひらがな入力でも汎用語判定が動作する"""
     assert is_generic("しすてむ") is True
     assert is_generic("とよた") is False
+
+
+# ================================================
+# グループ10: 拗音母音の回帰テスト（旧バグ修正確認）
+# ================================================
+
+def test_yoon_vowel_is_small_kana():
+    """
+    拗音の母音は小書き文字（ょ/ゅ/ゃ）で決まる。
+    旧バグ: 先頭文字（し→i）で決めていたため しょ=i と誤判定していた。
+    正しくは しょ→ょ→o, じょ→ょ→o, きゃ→ゃ→a, ちゅ→ゅ→u。
+    """
+    from src.scoring.features import kana_to_moras, to_hira
+
+    # しょ の母音は o（ょ由来）、i ではない
+    moras_sho = kana_to_moras(to_hira("ショ"))
+    assert moras_sho[0].vowel == "o", f"しょ の母音が {moras_sho[0].vowel!r}（期待: 'o'）"
+
+    # じょ の母音も o
+    moras_jo = kana_to_moras(to_hira("ジョ"))
+    assert moras_jo[0].vowel == "o"
+
+    # きゃ → a
+    moras_kya = kana_to_moras(to_hira("キャ"))
+    assert moras_kya[0].vowel == "a"
+
+    # ちゅ → u
+    moras_chu = kana_to_moras(to_hira("チュ"))
+    assert moras_chu[0].vowel == "u"
+
+
+def test_yoon_vowel_affects_c_sharpness():
+    """
+    拗音母音修正後、ショウジョ（しょ・う・じょ）は後舌母音優位 → c_sharpness < 0。
+    旧バグでは しょ=i（前舌）と誤判定し正値になっていた。
+    """
+    r = evaluate_phonology("ショウジョ")
+    # しょ(o), う(u), じょ(o): 後舌3/3 → c_sharpness = -1.0
+    assert r["c_sharpness"] < 0, f"ショウジョ c_sharpness={r['c_sharpness']:.3f}（期待: < 0）"
+
+
+def test_empty_result_has_is_generic():
+    """空文字・変換不能入力でも is_generic キーが存在する"""
+    for name in ["", "   ", "TOYOTA", "123"]:
+        r = evaluate_phonology(name)
+        assert "is_generic" in r, f"{name!r} に is_generic キーなし"
+        assert r["is_generic"] is False
