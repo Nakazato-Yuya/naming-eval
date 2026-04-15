@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 try:
-    from src.scoring.epi_scoring_final_plane import calculate_epi_plane
+    from src.scoring._legacy_epi_scoring_final_plane import calculate_epi_plane
 except ImportError:
     st.error("モジュールが見つかりません。")
     st.stop()

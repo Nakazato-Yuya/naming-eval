@@ -1,158 +1,153 @@
 # src/features/epi.py
 # -*- coding: utf-8 -*-
 """
-EPI 指標計算（長音「ー」対応・濁音/半濁音追加版）
-- ポリシー:
-  * f_len, f_open, f_sp, f_yoon に加えて f_voiced, f_semi_voiced を計算
-  * 「ー」は母音を保持する長音として扱う
-"""
+後方互換シム: phonology.py に処理を委譲しつつ、既存の公開 API を維持する。
 
+変更点（旧実装からの差異）:
+  - f_len / f_open / f_sp / f_yoon のスコア方向を統一
+      旧: ペナルティ型（0=最良, 高=悪い）
+      新: 品質型（1=最良, 高=良い） ← phonology.py 準拠
+  - f_sp から長音「ー」を除外（旧実装では不当ペナルティ）
+  - f_voiced は EPI の合成から除外（印象軸 C-1 相当のため）
+  - epi_weighted() の kana 引数をオプション化（テスト失敗修正）
+
+維持する公開 API:
+  evaluate_name(name: str) -> dict
+  epi_from_name(name: str) -> dict
+  epi_weighted(mora_list, kana=None) -> float
+  normalize_kana(name: str) -> str
+  to_mora(kana: str) -> list
+  f_len, f_open, f_sp, f_yoon, f_voiced, f_semi_voiced
+"""
 from __future__ import annotations
 
-import math
-import yaml
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-from src.features.reading import normalize_kana, to_mora
+import yaml
 
-# =========================
-# 設定 (weights.yaml 互換)
-# =========================
+# phonology.py に委譲
+from src.features.phonology import (
+    evaluate_phonology,
+    a_len as _a_len,
+    a_open as _a_open,
+    a_sp as _a_sp,
+    a_yoon as _a_yoon,
+    c_strength as _c_strength,
+)
+from src.scoring.features import kana_to_moras, to_hira
 
-def _load_weights():
-    # 設定ファイルがなければ空辞書を返す安全策
-    p = Path("configs/weights.yaml")
-    if not p.exists():
-        return {}
-    with open(p, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+# reading.py の公開 API を再エクスポート（後方互換: test_epi_weight.py 等が参照）
+from src.features.reading import normalize_kana, to_mora  # noqa: F401
 
-W = _load_weights()
-LEN_SIGMA = float(W.get("final_params", {}).get("delta", 1.0))
 
-# =========================
-# 定数・文字定義
-# =========================
-
-SPECIALS_ALL = {"ン", "ッ", "ー"}
-SPECIALS_NO_VOWEL = {"ン", "ッ"}
-
-# 濁音（Voiced）：ガ行、ザ行、ダ行、バ行
-VOICED_CHARS = set("ガギグゲゴザジズゼゾダヂヅデドバビブベボ")
-# 半濁音（Semi-Voiced）：パ行
-SEMI_VOICED_CHARS = set("パピプペポ")
-
-def _clamp01(x: float) -> float:
-    return 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
-
-# =========================
-# 個別指標
-# =========================
+# ================================================
+# 後方互換: 個別指標関数
+# （スコア方向は phonology.py に統一: 高=良い）
+# ================================================
 
 def f_len(mora_count: int, low: int = 2, high: int = 4) -> float:
-    """長さペナルティ（0=最適, 1=悪い）"""
-    if mora_count <= 0:
-        return 1.0
-    if low <= mora_count <= high:
-        d = 0.0
-    elif mora_count < low:
-        d = low - mora_count
-    else:
-        d = mora_count - high
-    sigma = max(1e-6, LEN_SIGMA)
-    return _clamp01(1.0 - math.exp(-(d * d) / (2 * sigma * sigma)))
+    """長さペナルティ → 品質型に変更（phonology.a_len に委譲）。"""
+    return _a_len(mora_count, mu_lo=low, mu_hi=high)
+
 
 def f_open(mora_list: List[str]) -> float:
-    """開音節不足（0=良い, 1=悪い）"""
-    M = len(mora_list)
-    if M == 0:
-        return 1.0
-    open_count = sum(1 for m in mora_list if m not in SPECIALS_NO_VOWEL)
-    return _clamp01(1.0 - (open_count / M))
+    """
+    開音節比率（品質型: 高=良い）。
+    mora_list はカタカナ文字列のリスト（reading.to_mora の戻り値形式）。
+    """
+    # カタカナ mora_list → ひらがな → Mora オブジェクト化
+    hira = "".join(to_hira(m) for m in mora_list)
+    moras = kana_to_moras(hira)
+    return _a_open(moras)
+
 
 def f_sp(mora_list: List[str]) -> float:
-    """特殊モーラ比（多いほどスコア1に近づく＝悪い）"""
-    M = len(mora_list) or 1
-    sp = sum(1 for m in mora_list if m in SPECIALS_ALL)
-    return sp / M
+    """特殊閉音節モーラ少なさ（品質型: 高=良い、ー除外）。"""
+    hira = "".join(to_hira(m) for m in mora_list)
+    moras = kana_to_moras(hira)
+    return _a_sp(moras)
+
 
 def f_yoon(mora_list: List[str]) -> float:
-    """拗音比（多いほどスコア1に近づく＝悪い）"""
-    M = len(mora_list) or 1
-    # 2文字以上（きゃ、しゅ等）を拗音とみなす
-    return sum(1 for m in mora_list if len(m) > 1) / M
+    """拗音少なさ（品質型: 高=良い）。"""
+    hira = "".join(to_hira(m) for m in mora_list)
+    moras = kana_to_moras(hira)
+    return _a_yoon(moras)
+
 
 def f_voiced(kana: str) -> float:
     """
-    濁音比（0=なし ～ 1=全て濁音）
-    ※ 力強さの指標（EPIとしては発音負荷として扱う場合が多い）
+    濁音比率（印象軸 C-1 相当）。
+    ※ EPI 合成には含めない。戻り値は後方互換のため残す。
     """
-    if not kana:
-        return 0.0
-    v_count = sum(1 for ch in kana if ch in VOICED_CHARS)
-    return v_count / len(kana)
+    hira = to_hira(kana)
+    moras = kana_to_moras(hira)
+    return _c_strength(moras)
+
 
 def f_semi_voiced(kana: str) -> float:
     """
-    半濁音比（0=なし ～ 1=全て半濁音）
-    ※ ポップさ・破裂音の指標
+    半濁音比率（パ行）。
+    ※ 後方互換のため関数は残すが EPI 合成には含めない。
     """
-    if not kana:
+    SEMI_VOICED_HIRA = frozenset("ぱぴぷぺぽ")
+    hira = to_hira(kana)
+    if not hira:
         return 0.0
-    p_count = sum(1 for ch in kana if ch in SEMI_VOICED_CHARS)
-    return p_count / len(kana)
+    return sum(1 for ch in hira if ch in SEMI_VOICED_HIRA) / len(hira)
 
-# =========================
-# 合成 EPI
-# =========================
 
-def epi_weighted(mora_list: List[str], kana: str) -> float:
+# ================================================
+# epi_weighted（後方互換シム）
+# ================================================
+
+def _load_epi_weights() -> Dict[str, float]:
+    """configs/weights.yaml の epi_weights セクションを読み込む。"""
+    p = Path("configs/weights.yaml")
+    if not p.exists():
+        return {}
+    with open(p, "r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    return data.get("epi_weights", {})
+
+
+def epi_weighted(
+    mora_list: List[str],
+    kana: Optional[str] = None,   # ← オプション化（旧テスト失敗修正）
+) -> float:
     """
-    YAMLの重みを使って合成。
-    YAMLに f_voiced, f_semi_voiced がなければ重み0として計算される。
+    加重平均 EPI（後方互換）。
+
+    内部は phonology.evaluate_phonology に委譲。
+    mora_list からひらがな列を再構成して軸A スコアを計算する。
+    kana 引数は後方互換のために受け取るが使用しない。
     """
-    w = W.get("epi_weights", {}) or {}
-    
-    # 各スコアを計算
-    scores = {
-        "f_len":  f_len(len(mora_list)),
-        "f_open": f_open(mora_list),
-        "f_sp":   f_sp(mora_list),
-        "f_yoon": f_yoon(mora_list),
-        "f_voiced": f_voiced(kana),
-        "f_semi_voiced": f_semi_voiced(kana),
-    }
+    # mora_list（カタカナ）→ 文字列再結合 → phonology に渡す
+    combined = "".join(mora_list)
+    r = evaluate_phonology(combined)
+    return r["axis_a"]
 
-    num = sum(float(w.get(k, 0.0)) * scores[k] for k in scores)
-    den = sum(float(w.get(k, 0.0)) for k in scores)
-    return float(num / den) if den > 0 else 0.0
 
-# =========================
-# 外部API
-# =========================
+# ================================================
+# evaluate_name / epi_from_name（後方互換シム）
+# ================================================
 
 def evaluate_name(name: str) -> Dict:
-    kana: str = normalize_kana(name)
-    mora: List[str] = to_mora(kana)
-    
-    # 新指標の計算
-    val_voiced = f_voiced(kana)
-    val_semi = f_semi_voiced(kana)
-    
-    return {
-        "name":  str(name),
-        "kana":  kana,
-        "mora":  list(mora),
-        "M":     len(mora),
-        "f_len": f_len(len(mora)),
-        "f_open":f_open(mora),
-        "f_sp":  f_sp(mora),
-        "f_yoon":f_yoon(mora),
-        "f_voiced": val_voiced,
-        "f_semi_voiced": val_semi,
-        "EPI":   epi_weighted(mora, kana),
-    }
+    """
+    名前 → 評価結果辞書（後方互換キーを含む）。
+
+    後方互換キー: name, kana, mora, M, EPI, f_len, f_open, f_sp, f_yoon,
+                  f_voiced, f_semi_voiced
+    新キー: axis_a, axis_b, a_*, b_*, c_*, mora_str, hira
+    """
+    r = evaluate_phonology(name)
+    # f_voiced / f_semi_voiced は印象軸だが後方互換のため追加
+    r["f_voiced"]      = r.get("c_strength", 0.0)
+    r["f_semi_voiced"] = f_semi_voiced(name)
+    return r
+
 
 def epi_from_name(name: str) -> Dict:
+    """evaluate_name のエイリアス（後方互換）。"""
     return evaluate_name(name)

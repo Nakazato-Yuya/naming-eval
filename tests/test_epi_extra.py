@@ -21,7 +21,7 @@ def test_sp_yoon_behave():
     f_yoon_1 = _get("f_yoon", r1)
     f_yoon_3 = _get("f_yoon", r3)
 
-    # 特殊モーラ比は r2 > r1 を期待
-    assert f_sp_2 > f_sp_1
-    # 拗音比は r3 >= r1 を期待（同等可）
-    assert f_yoon_3 >= f_yoon_1
+    # 品質型に変更: 特殊モーラが少ない r1(サクラ) > r2(シンブン)
+    assert f_sp_1 > f_sp_2
+    # 品質型に変更: 拗音が少ない r1(サクラ) >= r3(キャミ)
+    assert f_yoon_1 >= f_yoon_3

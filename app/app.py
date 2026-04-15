@@ -1,176 +1,269 @@
 import sys
 import pathlib
+import io
+
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 
-# パス設定
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-# ロジックインポート
 try:
-    from src.scoring.epi_scoring_final_plane import calculate_epi_plane
-    from src.scoring.epi_scoring_final_it import calculate_epi_it
-    from src.scoring.advanced_logic import AdvancedEPI, optimize_weights # 新規追加
+    from src.features.phonology import evaluate_phonology, is_generic
+    from src.scoring.features import kana_to_moras, to_hira
 except ImportError as e:
     st.error(f"モジュール読込エラー: {e}")
     st.stop()
 
-# インスタンス化
-advanced_analyzer = AdvancedEPI()
+# ─────────────────────────────────────────
+# ページ設定
+# ─────────────────────────────────────────
+st.set_page_config(page_title="Naming-Eval 3軸評価", layout="wide")
+st.title("Naming-Eval: 3軸ネーミング評価システム")
+st.caption("発音容易性（A軸）・音韻パターン性（B軸）・印象・方向性（C軸）")
+st.info("⚠️ このツールは **音韻のみ** を評価します。意味・独自性・商標的差別化は評価対象外です。", icon=None)
 
-# ---------------------------------------------------------
-# UI設定
-# ---------------------------------------------------------
-st.set_page_config(page_title="Naming-Eval Advanced", layout="wide")
-st.title("Naming-Eval Advanced: 次世代音韻評価システム")
-st.markdown("""
-言語学(音象徴)・統計学(ML)・心理学を統合した完全版ネーミング評価モデル。
-""")
+# ─────────────────────────────────────────
+# サイドバー: 入力 & 重み設定
+# ─────────────────────────────────────────
+with st.sidebar:
+    st.header("名前を入力")
+    name_input = st.text_input("カタカナ推奨", "メルカリ", key="name_input")
 
-# ---------------------------------------------------------
-# サイドバー: 設定
-# ---------------------------------------------------------
-st.sidebar.header("1. モデル設定")
-model_type = st.sidebar.radio("ベースモデル", ("標準 (Plane)", "IT特化 (IT Special)"))
+    st.markdown("---")
 
-if model_type == "標準 (Plane)":
-    eval_func = calculate_epi_plane
-    defaults = {"len": 0.2, "open": 0.15, "sp": 0.1, "yoon": 0.1, "voiced": 0.1, "semi": 0.0, "vowel": 0.1, "density": 0.25}
-else:
-    eval_func = calculate_epi_it
-    defaults = {"len": 0.35, "open": 0.05, "sp": 0.05, "yoon": 0.05, "voiced": 0.0, "semi": 0.0, "vowel": 0.1, "density": 0.4}
+    with st.expander("重み設定", expanded=False):
+        st.markdown("**軸A（発音容易性）**")
+        w_a_len  = st.slider("a_len  （長さ適正）",  0.0, 1.0, 0.35, 0.05)
+        w_a_open = st.slider("a_open （開音節比率）", 0.0, 1.0, 0.30, 0.05)
+        w_a_sp   = st.slider("a_sp   （特殊音少なさ）",0.0, 1.0, 0.20, 0.05)
+        w_a_yoon = st.slider("a_yoon （拗音少なさ）", 0.0, 1.0, 0.15, 0.05)
 
-st.sidebar.markdown("---")
-st.sidebar.header("2. 重み設定 (Weight)")
+        st.markdown("**軸B（記憶容易性）**")
+        w_b_rhythm = st.slider("b_rhythm（母音リズム）", 0.0, 1.0, 0.50, 0.05)
+        w_b_vowel  = st.slider("b_vowel （母音調和）",   0.0, 1.0, 0.50, 0.05)
 
-# ML学習ボタン
-if "optimized_weights" not in st.session_state:
-    st.session_state.optimized_weights = None
+        st.markdown("**軸間比率**")
+        w_axis_a = st.slider("A軸の比重", 0.0, 1.0, 0.70, 0.05)
+        w_axis_b = st.slider("B軸の比重", 0.0, 1.0, 0.30, 0.05)
 
-weights = {}
-# スライダー定義
-feature_keys = ["f_len", "f_open", "f_density", "f_sp", "f_yoon", "f_voiced", "f_semi", "f_vowel"]
-for key in feature_keys:
-    label = key.replace("f_", "")
-    # ML最適化済みならその値をデフォルトに、なければ固定デフォルト
-    def_val = st.session_state.optimized_weights.get(key, defaults.get(label, 0.1)) if st.session_state.optimized_weights else defaults.get(label, 0.1)
-    weights[key] = st.sidebar.slider(f"{label}", 0.0, 1.0, float(def_val), 0.05)
 
-# ---------------------------------------------------------
-# ロジック: 再計算
-# ---------------------------------------------------------
-def re_calculate(base, w):
-    score = 0
-    total_w = sum(w.values())
-    for k, v in w.items():
-        val = base.get(k, 0)
-        # 項目によっては「1-val」が必要な場合があるが、
-        # ここでは簡易的にbaseが正規化済みスコアを持っている前提とする
-        # ※実際には src/scoring 内の実装に合わせて調整してください
-        # 今回のAdvanced実装では、baseにあらかじめスコア化された値が入っていると仮定
-        score += val * v
-    return score / total_w if total_w > 0 else 0
+def _calc(name: str) -> dict:
+    """名前を評価して、カスタム重みで axis を再計算して返す。"""
+    r = evaluate_phonology(name)
 
-# ---------------------------------------------------------
-# メイン画面
-# ---------------------------------------------------------
-tab_main, tab_ml, tab_ai = st.tabs(["📊 総合診断 (Advanced)", "🤖 重み機械学習 (ML)", "🧠 AI生成 (GenAI)"])
+    # カスタム重みで axis_a を再計算
+    sum_a = w_a_len + w_a_open + w_a_sp + w_a_yoon
+    if sum_a > 0:
+        r["axis_a"] = (
+            w_a_len  * r["a_len"]
+            + w_a_open * r["a_open"]
+            + w_a_sp   * r["a_sp"]
+            + w_a_yoon * r["a_yoon"]
+        ) / sum_a
 
-with tab_main:
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        name = st.text_input("名前を入力", "メルカリ")
-        if name:
-            # 1. 基本計算
-            base_res = eval_func(name)
-            # 2. 拡張分析 (音象徴など)
-            adv_res = advanced_analyzer.analyze(name, base_res)
-            
-            # 3. カスタムスコア計算
-            final_score = re_calculate(adv_res, weights)
-            
-            # 表示
-            st.metric("Advanced EPI Score", f"{final_score:.3f}")
-            
-            # 音象徴インジケーター
-            ss = adv_res["f_symbolism"]
-            st.markdown("##### 音象徴 (Bouba-Kiki)")
-            if ss > 0.3:
-                st.info(f"📐 **Kiki (鋭い/速い)**: {ss:.2f}")
-            elif ss < -0.3:
-                st.success(f"🔴 **Bouba (丸い/大きい)**: {ss:.2f}")
-            else:
-                st.write(f"⚖️ Neutral: {ss:.2f}")
+    # カスタム重みで axis_b を再計算
+    sum_b = w_b_rhythm + w_b_vowel
+    if sum_b > 0:
+        r["axis_b"] = (
+            w_b_rhythm * r["b_rhythm"]
+            + w_b_vowel  * r["b_vowel"]
+        ) / sum_b
 
-    with col2:
-        if name:
-            # レーダーチャート (拡張版)
-            # 音象徴やリズムも表示したいが、重み計算には含めない参考値として追加
-            radar_data = {k: adv_res.get(k, 0) for k in weights.keys()}
-            
-            # 音象徴をグラフに重ねるためのトリック (0~1に正規化)
-            radar_data["Symbolism(Sharp)"] = (adv_res["f_symbolism"] + 1) / 2
-            
-            fig = go.Figure(data=go.Scatterpolar(
-                r=list(radar_data.values()) + [list(radar_data.values())[0]],
-                theta=list(radar_data.keys()) + [list(radar_data.keys())[0]],
-                fill='toself'
-            ))
-            fig.update_layout(polar=dict(radialaxis=dict(range=[0, 1])), height=400)
-            st.plotly_chart(fig, use_container_width=True)
+    # display 更新
+    r["axis_a_display"] = int(round(r["axis_a"] * 100))
+    r["axis_b_display"] = int(round(r["axis_b"] * 100))
 
-with tab_ml:
-    st.markdown("### ③ 重みの機械学習 (Machine Learning)")
-    st.write("過去の企業データ(CSV)から、時価総額と最も相関の高い重みをAIが自動算出します。")
-    
-    up_file = st.file_uploader("学習用CSV (Columns: Name, MarketCap)", type=["csv"])
-    if up_file:
-        df = pd.read_csv(up_file)
-        st.write("プレビュー:", df.head())
-        target = st.selectbox("目的変数 (時価総額など)", df.columns)
-        
-        if st.button("学習開始 (Auto-Optimize)"):
-            with st.spinner("Analyzing market data..."):
-                # データごとに特徴量計算を実行
-                features_list = []
-                for n in df.iloc[:, 0]: # 1列目を名前と仮定
-                    res = eval_func(str(n))
-                    # 必要な特徴量だけ抽出
-                    features_list.append({k: res.get(k, 0) for k in feature_keys})
-                
-                feat_df = pd.DataFrame(features_list)
-                # 元データと結合
-                train_df = pd.concat([df.reset_index(drop=True), feat_df], axis=1)
-                
-                # 最適化実行
-                opt_w, msg = optimize_weights(train_df, target, feature_keys)
-                
-                if opt_w:
-                    st.success(f"成功: {msg}")
-                    st.json(opt_w)
-                    st.session_state.optimized_weights = opt_w
-                    st.button("この重みを適用する") # UI再描画で適用
-                else:
-                    st.error(msg)
+    return r
 
-with tab_ai:
-    st.markdown("### ④ 生成AIによるネーミング (Generative AI)")
-    st.write("※ OpenAI APIキーが必要です (現在はデモモード)")
-    
-    prompt_style = st.selectbox("スタイル", ["IT企業風 (Short & Sharp)", "化粧品風 (Soft & Round)"])
-    if st.button("AI生成実行"):
-        st.info("Generating names with GPT-4...")
-        # スタブ (実際にはここで openai.ChatCompletion を呼ぶ)
-        import time
-        time.sleep(1)
-        
-        if prompt_style.startswith("IT"):
-            demos = ["アークス (Arcs)", "クオン (Quon)", "リンクル (Linkle)"]
+
+# ─────────────────────────────────────────
+# 評価
+# ─────────────────────────────────────────
+if not name_input.strip():
+    st.info("サイドバーに名前を入力してください。")
+    st.stop()
+
+r = _calc(name_input.strip())
+
+# 汎用語警告
+if is_generic(name_input.strip()):
+    st.warning(
+        f"「{name_input.strip()}」は一般名詞（汎用語）と判定されました。"
+        " 音韻スコアが高くても、ブランド名としての固有性・差別化・商標登録可能性は別途確認が必要です。"
+    )
+
+# ─────────────────────────────────────────
+# 4タブ
+# ─────────────────────────────────────────
+tab_a, tab_b, tab_c, tab_batch = st.tabs([
+    "🎵 発音容易性（A軸）",
+    "🔊 音韻パターン性（B軸）",
+    "🎨 印象・方向性（C軸）",
+    "📋 バッチ評価",
+])
+
+# ─────── タブ A ───────
+with tab_a:
+    st.metric("軸A スコア", f"{r['axis_a_display']} / 100")
+    st.progress(r["axis_a"])
+
+    st.markdown("---")
+    c1, c2, c3, c4 = st.columns(4)
+
+    metrics_a = [
+        (c1, "a_len",  "長さ適正",   "2〜4モーラが最適。ガウス減衰で評価。"),
+        (c2, "a_open", "開音節比率", "母音で終わるモーラの割合。高いほど発音しやすい。"),
+        (c3, "a_sp",   "特殊音少なさ","ッ・ン が少ないほど高スコア（ーはペナルティなし）。"),
+        (c4, "a_yoon", "拗音少なさ", "キャ・シュ などの拗音が少ないほど高スコア。"),
+    ]
+    for col, key, label, desc in metrics_a:
+        with col:
+            val = r[key]
+            st.markdown(f"**{label}**")
+            st.progress(val)
+            st.caption(f"{val:.2f} — {desc}")
+
+    st.markdown("---")
+    # レーダーチャート
+    cats = ["a_len", "a_open", "a_sp", "a_yoon"]
+    vals = [r[k] for k in cats] + [r[cats[0]]]
+    fig_a = go.Figure(go.Scatterpolar(
+        r=vals,
+        theta=cats + [cats[0]],
+        fill="toself",
+        line_color="#00CC96",
+        text=[f"{v:.2f}" for v in vals],
+        mode="lines+markers+text",
+        textposition="top center",
+    ))
+    fig_a.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+        showlegend=False,
+        height=320,
+        margin=dict(t=30, b=30, l=40, r=40),
+    )
+    st.plotly_chart(fig_a, use_container_width=True)
+
+# ─────── タブ B ───────
+with tab_b:
+    st.metric("軸B スコア（音韻パターン性）", f"{r['axis_b_display']} / 100")
+    st.progress(r["axis_b"])
+    st.caption("b_rhythm（リズム規則性）と b_vowel（母音調和）の加重平均。"
+               "「覚えやすさ」そのものではなく、音韻的パターンの強さを示します。")
+
+    st.markdown("---")
+    c1, c2 = st.columns(2)
+
+    with c1:
+        val = r["b_rhythm"]
+        st.markdown("**b_rhythm — リズム規則性**")
+        st.progress(val)
+        st.caption(
+            f"{val:.2f} — 隣接母音が同じ（AAAA型）または周期2パターン（ABAB・ABA型）"
+            "で高スコア。パナマ[a,a,a]=1.0、サクラ[a,u,a]=1.0、メルカリ[e,u,a,i]=0.0。"
+        )
+
+    with c2:
+        val = r["b_vowel"]
+        st.markdown("**b_vowel — 母音調和**")
+        st.progress(val)
+        st.caption(
+            f"{val:.2f} — 前舌母音{{i,e}}または後舌母音{{u,o,a}}に偏るほど高スコア。"
+            "0.5 = 前舌・後舌が均等（最低値）。"
+        )
+
+    # 母音列ビジュアライズ
+    st.markdown("---")
+    st.markdown("**母音の流れ**")
+    mora_vowels = []
+    moras = kana_to_moras(to_hira(r.get("kana", r["name"])))
+    for m in moras:
+        v = m.vowel if m.vowel else ("ん" if m.surface == "ん" else "—")
+        mora_vowels.append(f"`{m.surface}` ({v})")
+    st.markdown(" → ".join(mora_vowels) if mora_vowels else "（解析できませんでした）")
+
+# ─────── タブ C ───────
+with tab_c:
+    st.info(
+        "C軸は印象・方向性の参考指標です。合計スコア（A・B軸）には反映されません。\n\n"
+        "⚠️ c_sharpness は **母音のみ** の評価です（子音の影響は未考慮）。"
+        "例: スター[u,a] は後舌母音優位で Bouba 寄りと判定されますが、"
+        "実際の発音印象は子音 s・t の影響で Kiki 寄りに感じられます。"
+    )
+
+    st.markdown("---")
+    col_str, col_sharp, col_flu = st.columns(3)
+
+    with col_str:
+        val = r["c_strength"]
+        st.markdown("**強さ / 濁音比率**")
+        st.caption("清音 ←→ 濁音")
+        st.progress(val)
+        st.caption(f"{val:.2f}")
+
+    with col_sharp:
+        val_raw = r["c_sharpness"]
+        val_norm = (val_raw + 1) / 2  # [-1,+1] → [0,1]
+        st.markdown("**Bouba ←→ Kiki**")
+        st.caption("丸い・大きい ←→ 鋭い・小さい")
+        st.progress(val_norm)
+        st.caption(f"{val_raw:+.2f}（正=Kiki寄り、負=Bouba寄り）")
+
+    with col_flu:
+        val = r["c_fluency"]
+        st.markdown("**滑らかさ / 共鳴音比率**")
+        st.caption("硬い ←→ 滑らか")
+        st.progress(val)
+        st.caption(f"{val:.2f}")
+
+    st.markdown("---")
+    # 軸C 合計スコアに含めない理由の補足
+    with st.expander("C軸の解釈について"):
+        st.markdown("""
+- **c_strength（濁音比率）**: ガ・ザ・ダ・バ行の割合。高いほど重厚感・力強さ。
+- **c_sharpness（Kiki-Bouba）**: 前舌母音（イ・エ）多→Kiki（鋭い）、後舌母音（ア・ウ・オ）多→Bouba（丸い）。
+- **c_fluency（共鳴音比率）**: ナ・マ・ラ行・ン・ーの割合。高いほど流れるような響き。
+
+これらは「良し悪し」ではなく、ブランドの**方向性・印象の傾向**を示します。
+        """)
+
+# ─────── タブ バッチ ───────
+with tab_batch:
+    st.markdown("### 複数名を一括評価")
+    names_text = st.text_area(
+        "名前を1行1件で入力（最大200件）",
+        "トヨタ\nソニー\nメルカリ\nキャラメル\nシステム",
+        height=160,
+    )
+
+    if st.button("評価実行", type="primary"):
+        names = [n.strip() for n in names_text.splitlines() if n.strip()][:200]
+        if not names:
+            st.warning("名前を入力してください。")
         else:
-            demos = ["ルルナ (Luluna)", "モア (Moa)", "エリス (Eris)"]
-            
-        st.write("生成候補:")
-        for d in demos:
-            res = eval_func(d.split()[0])
-            st.write(f"- **{d}**: EPI Score {0.85 if prompt_style.startswith('IT') else 0.72}")
+            rows = []
+            for nm in names:
+                res = _calc(nm)
+                rows.append({
+                    "name":        res["name"],
+                    "axis_a":      round(res["axis_a"], 3),
+                    "axis_b":      round(res["axis_b"], 3),
+                    "c_strength":  round(res["c_strength"], 3),
+                    "c_sharpness": round(res["c_sharpness"], 3),
+                    "c_fluency":   round(res["c_fluency"], 3),
+                    "M":           res["M"],
+                    "mora_str":    res["mora_str"],
+                })
+            df = pd.DataFrame(rows)
+            st.dataframe(df, use_container_width=True)
+
+            # CSV ダウンロード
+            csv_buf = io.StringIO()
+            df.to_csv(csv_buf, index=False, encoding="utf-8")
+            st.download_button(
+                "CSVダウンロード",
+                data=csv_buf.getvalue().encode("utf-8"),
+                file_name="naming_eval_batch.csv",
+                mime="text/csv",
+            )
