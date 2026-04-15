@@ -553,6 +553,7 @@ def _empty_result(name: str) -> Dict:
         "axis_a_display": 0, "axis_b_display": 0,
         "EPI": 0.0, "f_len": 0.0, "f_open": 0.0, "f_sp": 1.0, "f_yoon": 1.0,
         "mora": [],
+        "is_generic": False,
     }
 
 

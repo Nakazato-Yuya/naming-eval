@@ -55,6 +55,13 @@ VOWEL_OF: Dict[str, str] = {
 SMALL_VOWELS = set("ゃゅょぁぃぅぇぉゎ")
 SPECIAL_MORA = {CHOON, SOKUON, MORAIC_N}
 
+# 拗音の小書き文字 → 母音（きゃ→a, しょ→o, ちゅ→u 等）
+# 先頭文字（し→i）ではなく小書き文字（ょ→o）で決まる
+SMALL_KANA_VOWEL: Dict[str, str] = {
+    "ゃ": "a", "ゅ": "u", "ょ": "o", "ゎ": "a",
+    "ぁ": "a", "ぃ": "i", "ぅ": "u", "ぇ": "e", "ぉ": "o",
+}
+
 
 def to_hira(s: str) -> str:
     """NFKC→カタカナをひらがなへ→ひらがな＋長音以外を除去。"""
@@ -116,8 +123,9 @@ def kana_to_moras(hira: str) -> List[Mora]:
         # --- 通常モーラ（拗音を結合） ---
         if i + 1 < len(hira) and hira[i + 1] in SMALL_VOWELS:
             cluster = hira[i : i + 2]             # 例) きゃ / ふぁ / くゎ
-            base0 = base_hira_without_diacritics(hira[i])
-            v = VOWEL_OF.get(base0)
+            # 母音は小書き文字で決まる（しょ→ょ→"o"）
+            # 先頭文字の母音（し→"i"）ではない
+            v = SMALL_KANA_VOWEL.get(hira[i + 1])
             moras.append(Mora(surface=cluster, vowel=v, is_special=False, is_yoon=True))
             last_vowel = v
             i += 2

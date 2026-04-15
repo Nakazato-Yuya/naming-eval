@@ -126,22 +126,82 @@ with tab_a:
 
     st.markdown("---")
     # レーダーチャート
-    cats = ["a_len", "a_open", "a_sp", "a_yoon"]
-    vals = [r[k] for k in cats] + [r[cats[0]]]
-    fig_a = go.Figure(go.Scatterpolar(
-        r=vals,
-        theta=cats + [cats[0]],
-        fill="toself",
-        line_color="#00CC96",
-        text=[f"{v:.2f}" for v in vals],
-        mode="lines+markers+text",
-        textposition="top center",
-    ))
-    fig_a.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+    # 数値ラベルを「データ点より少し内側」に表示することで軸ラベルと重ならない。
+    # 時計回り・12時スタートの4軸: top(0°)→right(90°)→bottom(180°)→left(270°)
+    # 各点の内側方向へ textposition を割り当て:
+    #   top    → "bottom center"  (値が下=内側に出る)
+    #   right  → "middle left"
+    #   bottom → "top center"
+    #   left   → "middle right"
+    cats      = ["a_len", "a_open", "a_sp", "a_yoon"]
+    labels    = ["長さ適正", "開音節比率", "特殊音少なさ", "拗音少なさ"]
+    vals      = [r[k] for k in cats]
+    textpos   = ["bottom center", "middle left", "top center", "middle right"]
+    # 数値表示用半径: データ点より 0.10 内側（最低 0.15 確保）
+    r_text    = [max(0.15, v - 0.10) for v in vals]
+
+    fig_a = go.Figure()
+
+    # 基準円（0.5）
+    fig_a.add_trace(go.Scatterpolar(
+        r=[0.5] * 5,
+        theta=labels + [labels[0]],
+        mode="lines",
+        line=dict(color="#DDDDDD", width=1, dash="dot"),
+        hoverinfo="skip",
         showlegend=False,
-        height=320,
-        margin=dict(t=30, b=30, l=40, r=40),
+    ))
+
+    # 塗りつぶしポリゴン
+    fig_a.add_trace(go.Scatterpolar(
+        r=vals + [vals[0]],
+        theta=labels + [labels[0]],
+        fill="toself",
+        fillcolor="rgba(0, 168, 120, 0.15)",
+        line=dict(color="#00A878", width=2),
+        marker=dict(size=8, color="#00A878", line=dict(color="white", width=1.5)),
+        mode="lines+markers",
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+
+    # 数値ラベル（内側に配置・軸ラベルと重ならない）
+    fig_a.add_trace(go.Scatterpolar(
+        r=r_text,
+        theta=labels,
+        mode="text",
+        text=[f"<b>{v:.2f}</b>" for v in vals],
+        textfont=dict(size=14, color="#1a6e50"),
+        textposition=textpos,
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+
+    fig_a.update_layout(
+        polar=dict(
+            bgcolor="rgba(248,250,249,1)",
+            radialaxis=dict(
+                visible=True,
+                range=[0, 1],
+                tickvals=[0.5, 1.0],
+                ticktext=["0.5", "1.0"],
+                tickfont=dict(size=10, color="#AAAAAA"),
+                gridcolor="#EEEEEE",
+                linecolor="#DDDDDD",
+                angle=45,
+            ),
+            angularaxis=dict(
+                tickfont=dict(size=13, color="#444444"),
+                gridcolor="#EEEEEE",
+                linecolor="#DDDDDD",
+                direction="clockwise",
+                rotation=90,
+            ),
+        ),
+        paper_bgcolor="white",
+        showlegend=False,
+        height=400,
+        margin=dict(t=20, b=20, l=90, r=90),
     )
     st.plotly_chart(fig_a, use_container_width=True)
 
